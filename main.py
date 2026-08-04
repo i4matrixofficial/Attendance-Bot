@@ -1,11 +1,17 @@
 import os
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 from dotenv import load_dotenv
 import traceback
+from datetime import time as dt_time, datetime
+from zoneinfo import ZoneInfo
 
 from attendance import record_attendance
+
+# ── Sri Lanka timezone (UTC+5:30) ─────────────────────────────────────────────
+SL_TZ = ZoneInfo("Asia/Colombo")
+AUTO_ATTENDANCE_TIME = dt_time(hour=9, minute=6, tzinfo=SL_TZ)
 
 # Load environment variables
 load_dotenv()
@@ -34,6 +40,73 @@ bot = AttendanceBot()
 async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
     print('------')
+
+    # Start the daily auto-attendance scheduler
+    if not auto_attendance.is_running():
+        auto_attendance.start()
+        print(f'⏰ Auto-attendance scheduled for 9:06 AM Sri Lanka time daily')
+
+# ── Scheduled auto-attendance (9:06 AM Sri Lanka time) ─────────────────────────
+@tasks.loop(time=AUTO_ATTENDANCE_TIME)
+async def auto_attendance():
+    """Automatically take attendance at 9:06 AM Sri Lanka time on weekdays."""
+    # Skip weekends (Saturday = 5, Sunday = 6)
+    if datetime.now(SL_TZ).weekday() >= 5:
+        print("⏭️ Skipping auto-attendance (weekend)")
+        return
+
+    voice_channel_id  = os.getenv('AUTO_VOICE_CHANNEL_ID')
+    report_channel_id = os.getenv('AUTO_REPORT_CHANNEL_ID')
+
+    if not voice_channel_id or not report_channel_id:
+        print('⚠️ AUTO_VOICE_CHANNEL_ID or AUTO_REPORT_CHANNEL_ID not set. Skipping auto-attendance.')
+        return
+
+    try:
+        # Fetch the voice channel
+        voice_channel = bot.get_channel(int(voice_channel_id))
+        if voice_channel is None:
+            voice_channel = await bot.fetch_channel(int(voice_channel_id))
+
+        # Fetch the text channel to post the report
+        report_channel = bot.get_channel(int(report_channel_id))
+        if report_channel is None:
+            report_channel = await bot.fetch_channel(int(report_channel_id))
+
+        if not isinstance(voice_channel, discord.VoiceChannel):
+            print(f'❌ AUTO_VOICE_CHANNEL_ID ({voice_channel_id}) is not a voice channel.')
+            return
+
+        if len(voice_channel.members) == 0:
+            await report_channel.send(
+                '⚠️ **Auto-Attendance (9:06 AM):** No one is in the voice channel right now. '
+                'No attendance recorded.'
+            )
+            print('⚠️ Auto-attendance: voice channel is empty.')
+            return
+
+        num_members = len(voice_channel.members)
+        xlsx_path = record_attendance(voice_channel)
+        xlsx_file = discord.File(xlsx_path)
+
+        await report_channel.send(
+            content=(
+                f'📋 **Auto-Attendance Report** — 9:06 AM Sri Lanka Time\n'
+                f'✅ Attendance recorded for **{num_members}** member(s) in {voice_channel.mention}!\n'
+                f'Here is the i4matrix Attendance Report 📊 (open in Excel or Google Sheets for colors!)'
+            ),
+            file=xlsx_file,
+        )
+        print(f'✅ Auto-attendance posted: {num_members} members in #{voice_channel.name}')
+
+    except Exception as e:
+        print(f'❌ Auto-attendance error: {e}')
+        traceback.print_exc()
+
+@auto_attendance.before_loop
+async def before_auto_attendance():
+    """Wait until the bot is fully ready before starting the schedule."""
+    await bot.wait_until_ready()
 
 # ── Autocomplete: dynamically fetch voice channels so list is always up-to-date ──
 async def channel_autocomplete(

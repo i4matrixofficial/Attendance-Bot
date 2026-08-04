@@ -1,0 +1,32 @@
+[Unit]
+Description=i4matrix Attendance Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# ── Change these two paths to match your Oracle VM deployment ────────────────
+# Where the project lives on the server
+WorkingDirectory=/opt/attendance-bot
+
+# Python inside the virtualenv
+ExecStart=/opt/attendance-bot/venv/bin/python /opt/attendance-bot/main.py
+
+# Restart policy: always restart if the process dies unexpectedly
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+# Run as a non-root user for security (create with: sudo useradd -r -s /sbin/nologin botuser)
+User=botuser
+Group=botuser
+
+# Forward stdout/stderr to journald (view with: sudo journalctl -u attendance-bot -f)
+StandardOutput=journal
+StandardError=journal
+
+# Load the .env file from the project directory
+EnvironmentFile=/opt/attendance-bot/.env
+
+[Install]
+WantedBy=multi-user.target
