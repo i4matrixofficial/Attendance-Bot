@@ -1,2 +1,0 @@
-# attendance-bot
-attendance bot
