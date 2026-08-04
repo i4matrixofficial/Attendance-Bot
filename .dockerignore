@@ -1,0 +1,11 @@
+.git
+.gitignore
+venv
+__pycache__
+*.pyc
+*.pyo
+*.log
+.env
+.env.*
+data
+oracle_setup
