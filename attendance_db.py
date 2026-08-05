@@ -132,3 +132,88 @@ async def get_logged_dates(channel_id: int, year: int, month: int) -> list[str]:
         )
 
     return [row["date"].isoformat() for row in rows]
+
+
+async def get_period_records(channel_id: int, start_date: date, end_date: date) -> dict[int, dict[str, int]]:
+    """Return aggregate attendance for a channel during an arbitrary date range."""
+    if _db_disabled or _pool is None:
+        return {}
+
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                member_id,
+                member_name,
+                SUM(CASE WHEN status = 'present' THEN 1 ELSE 0 END) AS present,
+                COUNT(*) AS total
+            FROM attendance_log
+            WHERE channel_id = $1
+              AND date >= $2
+              AND date <= $3
+            GROUP BY member_id, member_name
+            ORDER BY member_name
+            """,
+            channel_id,
+            start_date,
+            end_date,
+        )
+
+    return {
+        row["member_id"]: {
+            "name": row["member_name"],
+            "present": row["present"],
+            "total": row["total"],
+        }
+        for row in rows
+    }
+
+
+async def get_day_records(channel_id: int, target_date: date) -> dict[int, dict[str, str]]:
+    """Return per-member attendance status for a single day."""
+    if _db_disabled or _pool is None:
+        return {}
+
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT member_id, member_name, status
+            FROM attendance_log
+            WHERE channel_id = $1
+              AND date = $2
+            ORDER BY member_name
+            """,
+            channel_id,
+            target_date,
+        )
+
+    return {
+        row["member_id"]: {
+            "name": row["member_name"],
+            "status": row["status"],
+        }
+        for row in rows
+    }
+
+
+async def get_logged_dates_range(channel_id: int, start_date: date, end_date: date) -> list[str]:
+    """Return distinct logged dates for a channel within a date range."""
+    if _db_disabled or _pool is None:
+        return []
+
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT date
+            FROM attendance_log
+            WHERE channel_id = $1
+              AND date >= $2
+              AND date <= $3
+            ORDER BY date
+            """,
+            channel_id,
+            start_date,
+            end_date,
+        )
+
+    return [row["date"].isoformat() for row in rows]

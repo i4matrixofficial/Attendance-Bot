@@ -10,7 +10,11 @@ from zoneinfo import ZoneInfo
 
 from attendance import record_attendance
 from attendance_db import init_db
-from monthly_report import generate_monthly_report
+from monthly_report import (
+    generate_daily_report,
+    generate_monthly_report,
+    generate_weekly_report,
+)
 
 # ── Sri Lanka timezone (UTC+5:30) ─────────────────────────────────────────────
 SL_TZ = ZoneInfo("Asia/Colombo")
@@ -20,6 +24,7 @@ MONTHLY_REPORT_TIME = dt_time(hour=18, minute=0, tzinfo=SL_TZ)
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
+GUILD_ID = os.getenv('GUILD_ID')
 
 if not TOKEN:
     raise ValueError("DISCORD_TOKEN environment variable not set. Please check your .env file.")
@@ -36,8 +41,20 @@ class AttendanceBot(commands.Bot):
 
     async def setup_hook(self):
         await init_db()
-        await self.tree.sync()
-        print("Synced slash commands.")
+
+        if GUILD_ID:
+            guild = discord.Object(id=int(GUILD_ID))
+            await self.tree.sync(guild=guild)
+            print(f"Synced slash commands to guild {GUILD_ID}.")
+        else:
+            await self.tree.sync()
+            print("Synced slash commands globally. This may take a few minutes to appear.")
+
+    async def on_connect(self):
+        if GUILD_ID:
+            print(f"Bot connected. Using GUILD_ID={GUILD_ID} for immediate slash-command sync.")
+        else:
+            print("Bot connected. GUILD_ID is not set, using global slash-command sync.")
 
 bot = AttendanceBot()
 
@@ -45,6 +62,11 @@ bot = AttendanceBot()
 async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
     print('------')
+
+    if GUILD_ID:
+        guild = discord.Object(id=int(GUILD_ID))
+        synced = await bot.tree.sync(guild=guild)
+        print(f"Synced {len(synced)} slash commands for guild {GUILD_ID} on_ready().")
 
     # Start the daily auto-attendance scheduler
     if not auto_attendance.is_running():
@@ -274,6 +296,117 @@ async def track(interaction: discord.Interaction, channel: str = None):
         traceback.print_exc()
 
 # ── Monthly report slash command ─────────────────────────────────────────────
+@bot.tree.command(name="dailyreport", description="Generate a daily attendance report")
+@app_commands.describe(
+    day="Day number. Defaults to today.",
+    month="Month number (1-12). Defaults to the current month.",
+    year="Year number. Defaults to the current year."
+)
+@app_commands.default_permissions(manage_events=True)
+async def dailyreport(
+    interaction: discord.Interaction,
+    day: int = None,
+    month: int = None,
+    year: int = None,
+):
+    await interaction.response.defer(ephemeral=False)
+
+    now = datetime.now(SL_TZ)
+    chosen_year = year or now.year
+    chosen_month = month or now.month
+    chosen_day = day or now.day
+
+    try:
+        target_date = datetime(chosen_year, chosen_month, chosen_day).date()
+    except ValueError:
+        await interaction.followup.send("❌ Invalid date provided.")
+        return
+
+    target_channel_id = os.getenv('AUTO_VOICE_CHANNEL_ID')
+    if not target_channel_id:
+        await interaction.followup.send('⚠️ AUTO_VOICE_CHANNEL_ID not set. Cannot generate report.')
+        return
+
+    try:
+        voice_channel = bot.get_channel(int(target_channel_id))
+        if voice_channel is None:
+            voice_channel = await bot.fetch_channel(int(target_channel_id))
+
+        if not isinstance(voice_channel, discord.VoiceChannel):
+            await interaction.followup.send('❌ Configured AUTO_VOICE_CHANNEL_ID is not a voice channel.')
+            return
+
+        xlsx_path = await generate_daily_report(voice_channel.guild, voice_channel, target_date)
+        if xlsx_path is None:
+            await interaction.followup.send(f'⚠️ No attendance data for {target_date.isoformat()}.')
+            return
+
+        await interaction.followup.send(
+            content=(
+                f'📊 **Daily Attendance Summary** — {target_date.isoformat()}'
+                '\nHere is the daily attendance report.'
+            ),
+            file=discord.File(xlsx_path),
+        )
+    except Exception as e:
+        await interaction.followup.send(f"❌ An error occurred: `{e}`")
+        print(f"Daily report error: {e}")
+        traceback.print_exc()
+
+
+@bot.tree.command(name="weeklyreport", description="Generate a weekly attendance summary report")
+@app_commands.describe(
+    week="ISO week number. Defaults to the current week.",
+    year="Year number. Defaults to the current year."
+)
+@app_commands.default_permissions(manage_events=True)
+async def weeklyreport(
+    interaction: discord.Interaction,
+    week: int = None,
+    year: int = None,
+):
+    await interaction.response.defer(ephemeral=False)
+
+    now = datetime.now(SL_TZ)
+    chosen_year = year or now.year
+    chosen_week = week or now.isocalendar()[1]
+
+    if not (1 <= chosen_week <= 53):
+        await interaction.followup.send("❌ Week must be between 1 and 53.")
+        return
+
+    target_channel_id = os.getenv('AUTO_VOICE_CHANNEL_ID')
+    if not target_channel_id:
+        await interaction.followup.send('⚠️ AUTO_VOICE_CHANNEL_ID not set. Cannot generate report.')
+        return
+
+    try:
+        voice_channel = bot.get_channel(int(target_channel_id))
+        if voice_channel is None:
+            voice_channel = await bot.fetch_channel(int(target_channel_id))
+
+        if not isinstance(voice_channel, discord.VoiceChannel):
+            await interaction.followup.send('❌ Configured AUTO_VOICE_CHANNEL_ID is not a voice channel.')
+            return
+
+        xlsx_path = await generate_weekly_report(voice_channel.guild, voice_channel, chosen_year, chosen_week)
+        if xlsx_path is None:
+            await interaction.followup.send(f'⚠️ No attendance data for week {chosen_year}-W{chosen_week:02d}.')
+            return
+
+        await interaction.followup.send(
+            content=(
+                f'📊 **Weekly Attendance Summary** — {chosen_year}-W{chosen_week:02d}'
+                '\nHere is the weekly attendance report.'
+            ),
+            file=discord.File(xlsx_path),
+        )
+    except Exception as e:
+        await interaction.followup.send(f"❌ An error occurred: `{e}`")
+        print(f"Weekly report error: {e}")
+        traceback.print_exc()
+
+
 @bot.tree.command(name="monthlyreport", description="Generate a monthly attendance summary report")
 @app_commands.describe(
     month="Month number (1-12). Defaults to the current month.",
