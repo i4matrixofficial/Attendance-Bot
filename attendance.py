@@ -7,6 +7,8 @@ from openpyxl.styles import (
 )
 from openpyxl.utils import get_column_letter
 
+from attendance_db import log_day
+
 DATA_DIR = "data"
 
 # ── Color palette ──────────────────────────────────────────────────────────────
@@ -41,7 +43,7 @@ def _left():
     return Alignment(horizontal="left", vertical="center")
 
 # ── Main function ──────────────────────────────────────────────────────────────
-def record_attendance(channel: discord.VoiceChannel) -> str:
+async def record_attendance(channel: discord.VoiceChannel) -> str:
     """
     Records attendance for all non-bot guild members.
     Saves a colored Excel (.xlsx) report and returns the file path.
@@ -49,9 +51,9 @@ def record_attendance(channel: discord.VoiceChannel) -> str:
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
 
-    now          = datetime.now()
-    date_str     = now.strftime("%Y-%m-%d")
-    time_str     = now.strftime("%H:%M:%S")
+    now           = datetime.now()
+    date_str      = now.strftime("%Y-%m-%d")
+    time_str      = now.strftime("%H:%M:%S")
     timestamp_str = now.strftime("%Y%m%d_%H%M%S")
 
     safe_ch = "".join(c for c in channel.name if c.isalnum() or c == " ").strip()
@@ -64,6 +66,8 @@ def record_attendance(channel: discord.VoiceChannel) -> str:
     # All guild members excluding bots
     all_humans = [m for m in channel.guild.members if not m.bot]
     all_humans.sort(key=lambda m: (m.id not in present_ids, m.display_name.lower()))
+
+    await log_day(now.date(), channel, present_ids, all_humans)
 
     present_count = len(present_ids)
     absent_count  = len(all_humans) - present_count

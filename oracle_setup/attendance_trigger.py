@@ -91,7 +91,7 @@ async def run() -> None:
                 return
 
             num_members = len(voice_channel.members)
-            xlsx_path   = record_attendance(voice_channel)
+            xlsx_path   = await record_attendance(voice_channel)
             xlsx_file   = discord.File(xlsx_path)
 
             await report_channel.send(
